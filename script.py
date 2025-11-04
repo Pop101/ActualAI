@@ -24,6 +24,16 @@ local_vars = {}
 exec(LANGCHAIN_MODEL_CODE, {}, local_vars)
 llm = local_vars['model']
 
+USE_VECTORSTORE = os.getenv("USE_VECTORSTORE", "false").lower().strip() == "true"
+VECTORSTORE_TRANSACTION_TEMPLATE = Template(os.getenv("VECTORSTORE_TEMPLATE", """
+Name: {{ transaction.payee.name }}
+Amount: ${{ transaction.get_amount() }}
+Date: {{ transaction.date // 10000 }} - {{ transaction.date % 10000 // 100 }} - {{ transaction.date % 100 }} 
+Notes: {{ transaction.notes }}
+
+Was categorized as: {{ transaction.category.name }}
+""".strip()))
+
 ACTUAL_SERVER_URL = os.getenv("ACTUAL_SERVER_URL", "http://localhost:5006")
 ACTUAL_SERVER_PASSWORD = os.getenv("ACTUAL_SERVER_PASSWORD", "password")
 ACTUAL_SERVER_FILE = os.getenv("ACTUAL_SERVER_FILE", "My Finances")
@@ -61,6 +71,13 @@ Snippet: {{ result.snippet }}
 {% endfor %}
 {% endif %}
 
+{% if USE_VECTORSTORE %}
+Here are similar past transactions and their categories:
+{% for past_txn in similar_transactions %}
+{{ VECTORSTORE_TRANSACTION_TEMPLATE.render(transaction=past_txn) }}
+{% endfor %}
+{% endif %}
+
 You must respond with a valid JSON, with a category and a confidence.
 The category must be exactly one of these categories: {{ categories | map(attribute='name') | join(', ') }}.
 
@@ -88,8 +105,10 @@ def rate_limit_request():
         time.sleep(SEARCH_REQUEST_DELAY - (current_time - LAST_REQUEST_TIME))
     LAST_REQUEST_TIME = current_time
 
-def categorize_transaction(transaction, categories:list) -> dict | None:
+def categorize_transaction(transaction, categories:list, vectorstore_retriever:callable) -> dict | None:
     rate_limit_request()
+    
+    # Get web search results if available
     search = DuckDuckGoSearchResults(backend="html", output_format="list")
     try:
         search_results = search.invoke(transaction.payee.name)
@@ -99,15 +118,23 @@ def categorize_transaction(transaction, categories:list) -> dict | None:
         logging.info("Continuing without search results.")
         search_results = []
     
+    # Find similar transactions from vectorstore if available
+    similar_transactions = []
+    if vectorstore_retriever is not None:
+        similar_transactions = vectorstore_retriever(VECTORSTORE_TRANSACTION_TEMPLATE.render(transaction=transaction))
+    
+    # Render llm prompt
     prompt = PROMPT_TEMPLATE.render(
         **locals()
     )
     
-    # Try structured output first
+    # Invoke LLM
     try:
+        # Try structured output first
         structured_llm = llm.with_structured_output(TransactionCategorization, method="json_mode")
         result = structured_llm.invoke(prompt).dict()
     except (AttributeError, NotImplementedError, Exception) as e:
+        # Fallback to parsing raw llm output
         response = llm.invoke(prompt)
         try:
             result = json.loads(re.match(r'\{.*\}', response, re.DOTALL).group(0))
@@ -115,6 +142,7 @@ def categorize_transaction(transaction, categories:list) -> dict | None:
             logging.error(f"Failed to parse LLM response as JSON: {response}")
             return None
     
+    # Validate and parse result
     if not isinstance(result, dict) or 'category' not in result:
         return None
     
@@ -132,15 +160,51 @@ def categorize_transaction(transaction, categories:list) -> dict | None:
     
     return result
 
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_core.embeddings import Embeddings
+from sentence_transformers import SentenceTransformer
+
+class SentenceTransformerEmbeddings(Embeddings):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        self.model = SentenceTransformer(model_name)
+    
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.model.encode(texts, show_progress_bar=False).tolist()
+    
+    def embed_query(self, text: str) -> list[float]:
+        return self.model.encode([text], show_progress_bar=False)[0].tolist()
+
+def build_vectorstore(transactions: list) -> callable:
+    vectorstore = InMemoryVectorStore(SentenceTransformerEmbeddings("all-MiniLM-L6-v2"))
+    
+    txn_id_map = {}
+    for txn in transactions:
+        if txn.category == None: continue
+        text = VECTORSTORE_TRANSACTION_TEMPLATE.render(transaction=txn)
+        vectorstore.add_texts([text], metadatas=[{"transaction_id": txn.id}])
+        txn_id_map[txn.id] = txn
+    
+    def vectorstore_retriever(query: str):
+        results = vectorstore.max_marginal_relevance_search(query, k=5, fetch_k=5)
+        transactions = [txn_id_map[res.metadata['transaction_id']] for res in results]
+        return transactions
+    
+    return vectorstore_retriever
 
 from actual import Actual
 from actual.queries import get_categories, get_transactions, get_accounts
 
-with Actual(base_url=ACTUAL_SERVER_URL, password=ACTUAL_SERVER_PASSWORD, file=ACTUAL_SERVER_FILE) as actual:
-    actual.download_budget()
-    
+with Actual(base_url=ACTUAL_SERVER_URL, password=ACTUAL_SERVER_PASSWORD, file=ACTUAL_SERVER_FILE) as actual:    
     # Get the list of categories
     categories = get_categories(actual.session)
+    
+    # Build vectorstore
+    vectorstore_retriever = None
+    if USE_VECTORSTORE:
+        logging.info("Building vectorstore from past transactions...")
+        all_transactions = list(get_transactions(actual.session))
+        vectorstore_retriever = build_vectorstore(all_transactions)
+        logging.info("Vectorstore built.")
     
     # Categorize all transactions
     for account in get_accounts(actual.session):
@@ -154,7 +218,7 @@ with Actual(base_url=ACTUAL_SERVER_URL, password=ACTUAL_SERVER_PASSWORD, file=AC
             
             # Get the payee, notes and amount of each transaction
             logging.info(f"Categorizing transaction: {transaction.payee.name} with amount: {transaction.get_amount()}")
-            cat = categorize_transaction(transaction, categories)
+            cat = categorize_transaction(transaction, categories, vectorstore_retriever)
             if cat is None:
                 logging.warning(f"Could not categorize transaction: {transaction.payee.name}")
                 continue
