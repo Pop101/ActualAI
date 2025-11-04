@@ -164,6 +164,6 @@ with Actual(base_url=ACTUAL_SERVER_URL, password=ACTUAL_SERVER_PASSWORD, file=AC
                 continue
             
             # Update the transaction with the new category
-            transaction.category = cat['category']
+            transaction.category_id = cat['category'].id
             actual.commit()
-            logging.info(f"Categorized transaction: {transaction.payee.name} as {cat['category']} with confidence {cat['confidence']} (reasoning: {cat['reasoning']})")
+            logging.info(f"Categorized transaction: {transaction.payee.name} as {cat['category'].name} with confidence {cat['confidence']} (reasoning: {cat['reasoning']})")
