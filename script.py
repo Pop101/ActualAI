@@ -136,10 +136,17 @@ def categorize_transaction(transaction, categories:list, vectorstore_retriever:c
     except (AttributeError, NotImplementedError, Exception) as e:
         # Fallback to parsing raw llm output
         response = llm.invoke(prompt)
+        # Handle AIMessage objects from Chat models
+        if hasattr(response, 'content'):
+            response = response.content
+        response = str(response)
         try:
-            result = json.loads(re.match(r'\{.*\}', response, re.DOTALL).group(0))
-        except json.JSONDecodeError:
-            logging.error(f"Failed to parse LLM response as JSON: {response}")
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match is None:
+                raise json.JSONDecodeError("No JSON found", response, 0)
+            result = json.loads(match.group(0))
+        except (json.JSONDecodeError, AttributeError):
+            logging.error(f"Failed to parse LLM response as JSON: {response[:500]}")
             return None
     
     # Validate and parse result
