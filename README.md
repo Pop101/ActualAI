@@ -1,9 +1,10 @@
 # ActualAI
-[![GitHub issues](https://img.shields.io/github/issues/Pop101/ActualAI)](https://github.com/Pop101/ActualAI/issues)
 
-# Table of Contents
-- [ActualAI](#actualai)
-- [Table of Contents](#table-of-contents)
+Categorize transactions in Actual Budget using a model, optional payee search, and similar past transactions.
+
+![ActualAI project cover](.github/readme-cover.svg)
+
+## Table of Contents
 - [Overview](#overview)
 - [Technologies](#technologies)
 - [Methodology](#methodology)
@@ -20,11 +21,13 @@
       - [Vector Store Configuration](#vector-store-configuration)
       - [Prompt Configuration](#prompt-configuration)
 
-# Overview
+## Overview
+
+Start with a test budget. This script can apply categories automatically. When web search is enabled it sends payee names to the search provider, and transaction context goes to the configured model; choose your provider accordingly.
 
 ActualAI is an intelligent transaction categorization tool that leverages Large Language Models (LLMs) and web search to automatically categorize financial transactions in Actual Budget. The system uses a combination of machine learning, semantic search, and real-time web data to make informed categorization decisions with confidence scoring.
 
-# Technologies
+## Technologies
 This project is created with:
 - [ActualPy](https://actualpy.readthedocs.io/): 0.16.0
 - [LangChain](https://www.langchain.com/): 0.3.23
@@ -32,7 +35,7 @@ This project is created with:
 - [Python Levenshtein](https://github.com/rapidfuzz/python-Levenshtein): 0.27.1
 - [Sentence Transformers](https://www.sbert.net/): 5.1.2
 
-# Methodology
+## Methodology
 
 ## Transaction Categorization Process
 
@@ -55,7 +58,7 @@ When enabled, the system builds a vector store of previously categorized transac
 
 This embedding model was selected for speed and efficiency, balancing performance with resource usage.
 
-# Getting Started
+## Getting Started
 
 ## Installation
 
@@ -72,10 +75,6 @@ This embedding model was selected for speed and efficiency, balancing performanc
    poetry install
    ```
 
-   Alternatively, you can use pip:
-   ```bash
-   pip install actualpy langchain langchain-community langchain-ollama duckduckgo-search jinja2 python-levenshtein sentence-transformers
-   ```
 
 3. **Set up Actual Budget Server**
 
